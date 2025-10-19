@@ -26,3 +26,12 @@ db_backup_retention_count = 30
 db_transaction_log_retention_days = 30
 db_maintenance_day = 7
 db_maintenance_hour = 3
+
+
+availability_type = "REGIONAL"
+deletion_protection = true
+backup_enabled = true
+point_in_time_recovery = true
+
+# Helm Configuration
+helm_values_path = "environment/prod/prod-values.yaml"
