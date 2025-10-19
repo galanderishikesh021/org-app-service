@@ -38,7 +38,7 @@ istio:
   virtualService:
     enabled: true
     hosts:
-      - app-staging.example.com
+      - app-staging.inc.com
     gateways:
       - app-staging-gateway
 
