@@ -9,6 +9,14 @@ terraform {
       source  = "hashicorp/google-beta"
       version = "~> 5.0"
     }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.0"
+    }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.0"
+    }
   }
 }
 
@@ -22,241 +30,151 @@ provider "google-beta" {
   region  = var.region
 }
 
-data "google_compute_network" "existing" {
-  name = var.vpc_name
-}
-
-data "google_compute_subnetwork" "private" {
-  name   = var.private_subnet_name
-  region = var.region
-}
-
-resource "google_compute_global_address" "private_ip_address" {
-  name          = "${var.app_name}-${var.environment}-private-ip"
-  purpose       = "VPC_PEERING"
-  address_type  = "INTERNAL"
-  prefix_length = 16
-  network       = data.google_compute_network.existing.id
-}
-
-resource "google_service_networking_connection" "private_vpc_connection" {
-  network                 = data.google_compute_network.existing.id
-  service                 = "servicenetworking.googleapis.com"
-  reserved_peering_ranges = [google_compute_global_address.private_ip_address.name]
-}
-
-resource "google_sql_database_instance" "app_db" {
+# Data source for current GCP client configuration
+data "google_client_config" "current" {
   count = var.deploy_to_gke ? 1 : 0
-  name             = "${var.app_name}-${var.environment}-db"
-  database_version = var.db_version
-  region           = var.region
-
-  depends_on = [google_service_networking_connection.private_vpc_connection]
-
-  settings {
-    tier                        = var.db_tier
-    availability_type           = var.environment == "prod" ? "REGIONAL" : "ZONAL"
-    disk_type                   = var.db_disk_type
-    disk_size                   = var.db_disk_size
-    disk_autoresize             = true
-    disk_autoresize_limit       = var.db_disk_autoresize_limit
-    deletion_protection_enabled = var.environment == "prod" ? true : false
-
-    backup_configuration {
-      enabled                        = true
-      start_time                     = var.db_backup_start_time
-      location                       = var.region
-      point_in_time_recovery_enabled = var.environment == "prod" ? true : false
-      transaction_log_retention_days = var.db_transaction_log_retention_days
-      backup_retention_settings {
-        retained_backups = var.db_backup_retention_count
-        retention_unit   = "COUNT"
-      }
-    }
-
-    ip_configuration {
-      ipv4_enabled                                  = false
-      private_network                               = data.google_compute_network.existing.id
-      enable_private_path_for_google_cloud_services = true
-    }
-
-    maintenance_window {
-      day          = var.db_maintenance_day
-      hour         = var.db_maintenance_hour
-      update_track = "stable"
-    }
-
-    database_flags {
-      name  = "log_statement"
-      value = "all"
-    }
-
-    database_flags {
-      name  = "log_min_duration_statement"
-      value = "1000"
-    }
-
-    insights_config {
-      query_insights_enabled  = true
-      query_string_length     = 1024
-      record_application_tags = true
-      record_client_address   = true
-    }
-  }
-
-  deletion_protection = var.environment == "prod" ? true : false
-
-  lifecycle {
-    ignore_changes = [
-      settings[0].disk_size,
-    ]
-  }
 }
 
-resource "google_sql_database" "app_db" {
-  count    = var.deploy_to_gke ? 1 : 0
-  name     = var.db_name
-  instance = google_sql_database_instance.app_db[0].name
+# Database Module
+module "database" {
+  count = var.deploy_to_gke ? 1 : 0
+  
+  source = "./modules/database"
+  
+  project_id            = var.project_id
+  region               = var.region
+  environment          = var.environment
+  app_name             = var.app_name
+  vpc_name             = var.vpc_name
+  private_subnet_name  = var.private_subnet_name
+  
+  # Database Configuration
+  db_version                    = var.db_version
+  db_tier                      = var.db_tier
+  db_disk_type                 = var.db_disk_type
+  db_disk_size                 = var.db_disk_size
+  db_disk_autoresize_limit     = var.db_disk_autoresize_limit
+  db_name                      = var.db_name
+  db_username                  = var.db_username
+  db_password                  = var.db_password
+  
+  # Environment-specific database settings
+  availability_type            = var.availability_type
+  deletion_protection          = var.deletion_protection
+  backup_enabled               = var.backup_enabled
+  point_in_time_recovery       = var.point_in_time_recovery
+  
+  # Backup Configuration
+  db_backup_start_time         = var.db_backup_start_time
+  db_backup_retention_count    = var.db_backup_retention_count
+  db_transaction_log_retention_days = var.db_transaction_log_retention_days
+  db_maintenance_day           = var.db_maintenance_day
+  db_maintenance_hour          = var.db_maintenance_hour
+  
+  # Database flags and insights
+  database_flags               = var.database_flags
+  insights_enabled             = var.insights_enabled
+  insights_query_string_length = var.insights_query_string_length
+  insights_record_application_tags = var.insights_record_application_tags
+  insights_record_client_address = var.insights_record_client_address
 }
 
-resource "google_sql_user" "app_user" {
-  count    = var.deploy_to_gke ? 1 : 0
-  name     = var.db_username
-  instance = google_sql_database_instance.app_db[0].name
-  password = var.db_password
+# Kubernetes Module
+module "kubernetes" {
+  count = var.deploy_to_gke ? 1 : 0
+  
+  source = "./modules/kubernetes"
+  
+  project_id            = var.project_id
+  region               = var.region
+  environment          = var.environment
+  app_name             = var.app_name
+  vpc_name             = var.vpc_name
+  private_subnet_name  = var.private_subnet_name
+  gke_service_account_email = var.gke_service_account_email
+  
+  # GKE Configuration
+  gke_cluster_name     = var.gke_cluster_name
+  gke_zone            = var.gke_zone
+  gke_machine_type    = var.gke_machine_type
+  gke_node_count      = var.gke_node_count
+  gke_disk_size       = var.gke_disk_size
+  gke_disk_type       = var.gke_disk_type
+  gke_enable_autoscaling = var.gke_enable_autoscaling
+  gke_min_node_count  = var.gke_min_node_count
+  gke_max_node_count  = var.gke_max_node_count
 }
 
-resource "google_secret_manager_secret" "db_credentials" {
-  secret_id = "${var.app_name}-${var.environment}-db-credentials"
-
-  replication {
-    auto {}
-  }
-
-  labels = {
-    environment = var.environment
-    application = var.app_name
-  }
+# App Module
+module "app" {
+  count = var.deploy_to_gke ? 1 : 0
+  
+  source = "./modules/app"
+  
+  # Cluster Configuration
+  cluster_endpoint        = module.kubernetes[0].cluster_endpoint
+  cluster_token          = data.google_client_config.current[0].access_token
+  cluster_ca_certificate = module.kubernetes[0].cluster_ca_certificate
+  service_account_email  = module.kubernetes[0].service_account_email
+  service_account_key    = module.kubernetes[0].service_account_key
+  
+  # Application Configuration
+  app_name      = var.app_name
+  environment   = var.environment
+  project_id    = var.project_id
+  app_version   = var.app_version
+  image_repository = var.image_repository
+  image_tag     = var.image_tag
+  replica_count = var.replica_count
+  log_level     = var.log_level
+  
+  # Helm Configuration
+  helm_repository   = var.helm_repository
+  helm_chart_name   = var.helm_chart_name
+  helm_chart_version = var.helm_chart_version
+  helm_values_path  = var.helm_values_path
+  
+  # Database Configuration
+  db_host     = module.database[0].cloud_sql_private_ip
+  db_name     = var.db_name
+  db_username = var.db_username
+  db_password = var.db_password
+  
+  # Resource Configuration
+  resource_limits_cpu    = var.resource_limits_cpu
+  resource_limits_memory = var.resource_limits_memory
+  resource_requests_cpu  = var.resource_requests_cpu
+  resource_requests_memory = var.resource_requests_memory
+  
+  # Service Configuration
+  service_type = var.service_type
+  
+  # Ingress Configuration
+  enable_ingress     = var.enable_ingress
+  ingress_class      = var.ingress_class
+  ingress_host       = var.ingress_host
+  enable_tls         = var.enable_tls
+  cert_manager_issuer = var.cert_manager_issuer
+  
+  # Autoscaling Configuration
+  enable_autoscaling = var.enable_autoscaling
+  hpa_min_replicas   = var.hpa_min_replicas
+  hpa_max_replicas   = var.hpa_max_replicas
+  hpa_cpu_target     = var.hpa_cpu_target
+  hpa_memory_target  = var.hpa_memory_target
+  
+  # Registry Configuration
+  use_private_registry = var.use_private_registry
 }
 
-resource "google_secret_manager_secret_version" "db_credentials" {
-  secret = google_secret_manager_secret.db_credentials.id
-  secret_data = jsonencode({
-    username = var.db_username
-    password = var.db_password
-    host     = var.deploy_to_gke ? google_sql_database_instance.app_db[0].private_ip_address : ""
-    port     = "5432"
-    database = var.db_name
-    connection_name = var.deploy_to_gke ? google_sql_database_instance.app_db[0].connection_name : ""
-  })
-}
-
-resource "google_service_account" "app_service_account" {
-  count        = var.deploy_to_gke ? 1 : 0
-  account_id   = "${var.app_name}-${var.environment}-sa"
-  display_name = "Application Service Account for ${var.app_name} ${var.environment}"
-  description  = "Service account for ${var.app_name} application in ${var.environment} environment"
-}
-
-resource "google_service_account_key" "registry_key" {
-  count              = var.deploy_to_gke ? 1 : 0
-  service_account_id = google_service_account.app_service_account[0].name
-}
-
+# IAM binding for Workload Identity (for GKE access)
 resource "google_secret_manager_secret_iam_binding" "db_credentials_access" {
-  secret_id = google_secret_manager_secret.db_credentials.secret_id
+  count = var.deploy_to_gke ? 1 : 0
+  
+  secret_id = module.database[0].secret_manager_secret_id
   role      = "roles/secretmanager.secretAccessor"
 
   members = [
     "serviceAccount:${var.gke_service_account_email}",
   ]
-}
-
-resource "google_container_cluster" "primary" {
-  count    = var.deploy_to_gke ? 1 : 0
-  name     = var.gke_cluster_name != "" ? var.gke_cluster_name : "${var.app_name}-${var.environment}-cluster"
-  location = var.gke_zone
-  
-  remove_default_node_pool = true
-  initial_node_count       = 1
-  
-  network    = data.google_compute_network.existing.id
-  subnetwork = data.google_compute_subnetwork.private.id
-  
-  workload_identity_config {
-    workload_pool = "${var.project_id}.svc.id.goog"
-  }
-  
-  private_cluster_config {
-    enable_private_nodes    = true
-    enable_private_endpoint = false
-    master_ipv4_cidr_block  = "172.16.0.0/28"
-  }
-  
-  master_authorized_networks_config {
-    cidr_blocks {
-      cidr_block   = "0.0.0.0/0"
-      display_name = "All"
-    }
-  }
-  
-  ip_allocation_policy {
-    cluster_secondary_range_name  = "pods"
-    services_secondary_range_name = "services"
-  }
-  
-  network_policy {
-    enabled = true
-  }
-  
-  binary_authorization {
-    evaluation_mode = "PROJECT_SINGLETON_POLICY_ENFORCE"
-  }
-  
-  enable_shielded_nodes = true
-  
-  confidential_nodes {
-    enabled = false
-  }
-}
-
-resource "google_container_node_pool" "primary_nodes" {
-  count      = var.deploy_to_gke ? 1 : 0
-  name       = "${var.app_name}-${var.environment}-node-pool"
-  location   = var.gke_zone
-  cluster    = google_container_cluster.primary[0].name
-  node_count = var.gke_node_count
-  
-  node_config {
-    preemptible  = false
-    machine_type = var.gke_machine_type
-    disk_size_gb = var.gke_disk_size
-    disk_type    = var.gke_disk_type
-    
-    service_account = var.gke_service_account_email
-    
-    workload_metadata_config {
-      mode = "GKE_METADATA"
-    }
-    
-    oauth_scopes = [
-      "https://www.googleapis.com/auth/cloud-platform"
-    ]
-    
-    shielded_instance_config {
-      enable_secure_boot          = true
-      enable_integrity_monitoring = true
-    }
-  }
-  
-  autoscaling {
-    min_node_count = var.gke_min_node_count
-    max_node_count = var.gke_max_node_count
-    enabled        = var.gke_enable_autoscaling
-  }
-  
-  management {
-    auto_repair  = true
-    auto_upgrade = true
-  }
 }
