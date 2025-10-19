@@ -1,0 +1,60 @@
+# Staging Environment Helm Values
+replicaCount: 2
+
+image:
+  repository: gcr.io/crucial-study-475405-e4/app
+  tag: "staging-latest"
+
+serviceAccount:
+  annotations:
+    iam.gke.io/gcp-service-account: "app-stage@crucial-study-475405-e4.iam.gserviceaccount.com"
+
+env:
+  - name: ENVIRONMENT
+    value: "staging"
+  - name: LOG_LEVEL
+    value: "info"
+
+database:
+  external:
+    enabled: true
+    secretName: "app-staging-db-credentials"
+
+secretManager:
+  enabled: true
+  secretName: "app-staging-db-credentials"
+  projectId: "crucial-study-475405-e4"
+
+ingress:
+  enabled: true
+  hosts:
+    - host: app-staging.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+istio:
+  enabled: true
+  virtualService:
+    enabled: true
+    hosts:
+      - app-staging.example.com
+    gateways:
+      - app-staging-gateway
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 200m
+    memory: 256Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+monitoring:
+  enabled: true
