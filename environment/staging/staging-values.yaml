@@ -28,7 +28,7 @@ secretManager:
 ingress:
   enabled: true
   hosts:
-    - host: app-staging.example.com
+    - host: app-staging.inc.com
       paths:
         - path: /
           pathType: Prefix
