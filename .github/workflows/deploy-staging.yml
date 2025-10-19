@@ -1,0 +1,241 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [ staging ]
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deploy even if tests fail'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GKE_CLUSTER: ${{ secrets.GKE_CLUSTER_NAME }}
+  GKE_ZONE: ${{ secrets.GKE_ZONE }}
+  REGISTRY: gcr.io
+  SERVICE: app
+  ENVIRONMENT: staging
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Run tests
+      run: |
+        python -m pytest tests/ -v --cov=app --cov-report=xml
+    
+    - name: Run integration tests
+      run: |
+        python -m pytest tests/integration/ -v
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: staging
+        name: staging-coverage
+
+    - name: Validate Terraform
+      run: |
+        cd terraform
+        terraform init
+        terraform validate
+        terraform fmt -check
+
+    - name: Security scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  build:
+    needs: validate
+    runs-on: ubuntu-latest
+    if: always() && (needs.validate.result == 'success' || github.event.inputs.force_deploy == 'true')
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Google Auth
+      id: auth
+      uses: 'google-github-actions/auth@v2'
+      with:
+        credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+    - name: Set up Cloud SDK
+      uses: 'google-github-actions/setup-gcloud@v2'
+
+    - name: Configure Docker
+      run: gcloud auth configure-docker
+
+    - name: Build Docker Image
+      run: |
+        docker build -t "$REGISTRY/$PROJECT_ID/$SERVICE:staging-$GITHUB_SHA" .
+        docker tag "$REGISTRY/$PROJECT_ID/$SERVICE:staging-$GITHUB_SHA" "$REGISTRY/$PROJECT_ID/$SERVICE:staging-latest"
+
+    - name: Push Docker Image
+      run: |
+        docker push "$REGISTRY/$PROJECT_ID/$SERVICE:staging-$GITHUB_SHA"
+        docker push "$REGISTRY/$PROJECT_ID/$SERVICE:staging-latest"
+
+  plan:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always() && (needs.build.result == 'success' || github.event.inputs.force_deploy == 'true')
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Google Auth
+      id: auth
+      uses: 'google-github-actions/auth@v2'
+      with:
+        credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+    - name: Set up Cloud SDK
+      uses: 'google-github-actions/setup-gcloud@v2'
+
+    - name: Get GKE credentials
+      run: |
+        gcloud container clusters get-credentials $GKE_CLUSTER --zone $GKE_ZONE --project $PROJECT_ID
+
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.0
+
+    - name: Terraform Init
+      run: |
+        cd terraform
+        terraform init
+
+    - name: Terraform Plan
+      run: |
+        cd terraform
+        terraform plan -var-file="../environment/staging/staging-terraform.tfvars" -out=tfplan
+
+    - name: Upload Terraform Plan
+      uses: actions/upload-artifact@v3
+      with:
+        name: terraform-plan-staging
+        path: terraform/tfplan
+
+  deploy:
+    needs: plan
+    runs-on: ubuntu-latest
+    if: always() && (needs.plan.result == 'success' || github.event.inputs.force_deploy == 'true')
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Google Auth
+      id: auth
+      uses: 'google-github-actions/auth@v2'
+      with:
+        credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+    - name: Set up Cloud SDK
+      uses: 'google-github-actions/setup-gcloud@v2'
+
+    - name: Get GKE credentials
+      run: |
+        gcloud container clusters get-credentials $GKE_CLUSTER --zone $GKE_ZONE --project $PROJECT_ID
+
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.0
+
+    - name: Download Terraform Plan
+      uses: actions/download-artifact@v3
+      with:
+        name: terraform-plan-staging
+        path: terraform
+
+    - name: Terraform Apply
+      run: |
+        cd terraform
+        terraform apply tfplan
+
+  post-apply:
+    needs: deploy
+    runs-on: ubuntu-latest
+    if: always() && (needs.deploy.result == 'success' || github.event.inputs.force_deploy == 'true')
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Google Auth
+      id: auth
+      uses: 'google-github-actions/auth@v2'
+      with:
+        credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+    - name: Set up Cloud SDK
+      uses: 'google-github-actions/setup-gcloud@v2'
+
+    - name: Get GKE credentials
+      run: |
+        gcloud container clusters get-credentials $GKE_CLUSTER --zone $GKE_ZONE --project $PROJECT_ID
+
+    - name: Verify deployment
+      run: |
+        kubectl get pods -n $ENVIRONMENT
+        kubectl get services -n $ENVIRONMENT
+        kubectl get ingress -n $ENVIRONMENT
+
+    - name: Run staging tests
+      run: |
+        # Wait for deployment to be ready
+        kubectl wait --for=condition=available --timeout=300s deployment/$SERVICE -n $ENVIRONMENT
+        
+        # Get service endpoint
+        SERVICE_IP=$(kubectl get service $SERVICE -n $ENVIRONMENT -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+        
+        # Run comprehensive tests
+        curl -f http://$SERVICE_IP/health || exit 1
+        curl -f http://$SERVICE_IP/api/ready || exit 1
+        echo "Staging deployment successful!"
+
+    - name: Run performance tests
+      run: |
+        # Add your performance testing commands here
+        echo "Running performance tests against staging environment"
+        # Example: k6 run performance-tests.js
+
+    - name: Notify Slack
+      uses: slackapi/slack-github-action@v2
+      with:
+        status: ${{ job.status }}
+        channel: '#staging-deployments'
+        text: 'Staging deployment ${{ job.status }} for commit ${{ github.sha }}'
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
