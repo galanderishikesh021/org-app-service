@@ -26,3 +26,11 @@ db_backup_retention_count = 3
 db_transaction_log_retention_days = 3
 db_maintenance_day = 1
 db_maintenance_hour = 4
+
+availability_type = "ZONAL"
+deletion_protection = false
+backup_enabled = false
+point_in_time_recovery = false
+
+# Helm Configuration
+helm_values_path = "environment/dev/dev-values.yaml"
