@@ -1,0 +1,21 @@
+apiVersion: v2
+name: app
+description: A Helm chart for app
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - web
+  - application
+  - postgresql
+home: https://github.com/galanderishkesh021/app
+sources:
+  - https://github.com/galanderishkesh021/app
+maintainers:
+  - name: Your Team
+    email: team@inc.com
+dependencies:
+  - name: postgresql
+    version: "12.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: postgresql.enabled
