@@ -26,3 +26,11 @@ db_backup_retention_count = 7
 db_transaction_log_retention_days = 7
 db_maintenance_day = 1
 db_maintenance_hour = 4
+
+availability_type = "ZONAL"
+deletion_protection = false
+backup_enabled = true
+point_in_time_recovery = false
+
+# Helm Configuration
+helm_values_path = "environment/staging/staging-values.yaml"
