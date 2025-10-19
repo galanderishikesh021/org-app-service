@@ -38,7 +38,7 @@ istio:
   virtualService:
     enabled: true
     hosts:
-      - app.example.com
+      - app.inc.com
     gateways:
       - app-prod-gateway
 
