@@ -41,7 +41,6 @@ variable "gke_service_account_email" {
   type        = string
 }
 
-# Database Configuration
 variable "db_version" {
   description = "Cloud SQL database version"
   type        = string
@@ -118,4 +117,112 @@ variable "db_maintenance_hour" {
   description = "Maintenance hour (0-23)"
   type        = number
   default     = 4
+}
+
+# Environment-specific database settings
+variable "availability_type" {
+  description = "Cloud SQL availability type (ZONAL or REGIONAL)"
+  type        = string
+  default     = "ZONAL"
+}
+
+variable "deletion_protection" {
+  description = "Enable deletion protection"
+  type        = bool
+  default     = false
+}
+
+variable "backup_enabled" {
+  description = "Enable automated backups"
+  type        = bool
+  default     = true
+}
+
+variable "point_in_time_recovery" {
+  description = "Enable point-in-time recovery"
+  type        = bool
+  default     = false
+}
+
+variable "database_flags" {
+  description = "Database flags for environment-specific configuration"
+  type = list(object({
+    name  = string
+    value = string
+  }))
+  default = [
+    {
+      name  = "log_statement"
+      value = "all"
+    },
+    {
+      name  = "log_min_duration_statement"
+      value = "1000"
+    }
+  ]
+}
+
+variable "insights_enabled" {
+  description = "Enable query insights"
+  type        = bool
+  default     = true
+}
+
+variable "insights_query_string_length" {
+  description = "Query string length for insights"
+  type        = number
+  default     = 1024
+}
+
+variable "insights_record_application_tags" {
+  description = "Record application tags in insights"
+  type        = bool
+  default     = true
+}
+
+variable "insights_record_client_address" {
+  description = "Record client address in insights"
+  type        = bool
+  default     = true
+}
+
+variable "service_type" {
+  description = "Kubernetes service type"
+  type        = string
+  default     = "ClusterIP"
+}
+
+variable "use_private_registry" {
+  description = "Use private container registry"
+  type        = bool
+  default     = true
+}
+
+variable "helm_repository" {
+  description = "Helm repository URL"
+  type        = string
+  default     = ""
+}
+
+variable "helm_chart_name" {
+  description = "Helm chart name"
+  type        = string
+  default     = "app"
+}
+
+variable "helm_chart_version" {
+  description = "Helm chart version"
+  type        = string
+  default     = ""
+}
+
+variable "helm_values_path" {
+  description = "Path to environment-specific Helm values file"
+  type        = string
+}
+
+variable "enable_istio" {
+  description = "Enable Istio service mesh"
+  type        = bool
+  default     = false
 }
