@@ -159,7 +159,7 @@ jobs:
     if: failure()
     runs-on: ubuntu-latest
     steps:
-    - name: 📢 Notify Slack on Failure
+    - name: Notify Slack on Failure
       run: |
         curl -X POST -H 'Content-type: application/json' \
           --data "{\"text\":\"Deployment failed on *${{ github.ref }}* for *${{ github.repository }}*\"}" \
