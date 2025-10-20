@@ -1,0 +1,183 @@
+replicaCount: 2
+
+image:
+  repository: your-project-id/app
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations:
+    iam.gke.io/gcp-service-account: "app@your-project.iam.gserviceaccount.com"
+  name: ""
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  fsGroup: 2000
+
+securityContext:
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: true
+  className: "istio"
+  annotations:
+    kubernetes.io/ingress.class: istio
+    istio.io/rev: default
+  hosts:
+    - host: sample-app.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Environment-specific configuration
+env:
+  - name: ENVIRONMENT
+    value: "dev"
+  - name: LOG_LEVEL
+    value: "info"
+  - name: PORT
+    value: "8080"
+
+# Database configuration
+database:
+  # Use external Cloud SQL instance
+  external:
+    enabled: true
+    host: ""
+    port: 5432
+    name: "appdb"
+    username: "appuser"
+    # Password will be loaded from Secret Manager
+    secretName: "db-credentials"
+    secretKey: "password"
+  
+  # Use embedded PostgreSQL (for development only)
+  embedded:
+    enabled: false
+
+# Secret Manager integration
+secretManager:
+  enabled: true
+  secretName: "db-credentials"
+  projectId: ""
+
+# Health checks
+healthCheck:
+  enabled: true
+  path: "/health"
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Istio configuration
+istio:
+  enabled: true
+  # Virtual Service configuration
+  virtualService:
+    enabled: true
+    hosts:
+      - sample-app.example.com
+    gateways:
+      - sample-app-gateway
+    http:
+      - match:
+          - uri:
+              prefix: /
+        route:
+          - destination:
+              host: sample-app
+              port:
+                number: 80
+        timeout: 30s
+        retries:
+          attempts: 3
+          perTryTimeout: 10s
+
+  # Destination Rule configuration
+  destinationRule:
+    enabled: true
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 10
+        http:
+          http1MaxPendingRequests: 10
+          maxRequestsPerConnection: 2
+      circuitBreaker:
+        consecutiveErrors: 3
+        interval: 30s
+        baseEjectionTime: 30s
+
+# Monitoring and observability
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    path: /metrics
+
+# Network policies
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: istio-system
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: istio-system
+      ports:
+        - protocol: TCP
+          port: 443
+    - to: []  # Allow all egress for database connectivity
+      ports:
+        - protocol: TCP
+          port: 5432

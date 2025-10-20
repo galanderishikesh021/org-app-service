@@ -1,0 +1,166 @@
+name: Deploy to Development
+
+on:
+  push:
+    branches: [ develop, dev ]
+  pull_request:
+    branches: [ develop ]
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GKE_CLUSTER: ${{ secrets.GKE_CLUSTER_NAME }}
+  GKE_ZONE: ${{ secrets.GKE_ZONE }}
+  REGISTRY: gcr.io
+  SERVICE: app
+  ENVIRONMENT: dev
+  GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Make scripts executable
+      run: chmod +x scripts/*.sh
+
+    - name: Run validation stage
+      run: ./scripts/validate.sh ${{ env.ENVIRONMENT }}
+
+  build:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+    
+    - name: Google Auth
+      uses: google-github-actions/auth@v2.0.0
+      with:
+        credentials_json: '${{ env.GCP_SA_KEY }}'
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2.0.0
+
+    - name: Make scripts executable
+      run: chmod +x scripts/*.sh
+
+    - name: Run build stage
+      run: ./scripts/build.sh ${{ env.ENVIRONMENT }}
+
+  plan:
+    needs: build
+    runs-on: ubuntu-latest
+    if: contains('refs/heads/develop,refs/heads/dev', github.ref)
+    steps:
+    
+    - name: Google Auth
+      uses: google-github-actions/auth@v2.0.0
+      with:
+        credentials_json: '${{ env.GCP_SA_KEY }}'
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2.0.0
+
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.0
+
+    - name: Make scripts executable
+      run: chmod +x scripts/*.sh
+
+    - name: Terraform Init
+      run: terraform init
+
+    - name: Terraform Validate
+      run: terraform validate
+
+    - name: Run plan stage
+      run: ./scripts/plan.sh ${{ env.ENVIRONMENT }}
+
+    - name: Upload Terraform Plan
+      uses: actions/upload-artifact@v3
+      with:
+        name: terraform-plan-${{ env.ENVIRONMENT }}
+        path: terraform/tfplan
+
+  deploy:
+    needs: plan
+    runs-on: ubuntu-latest
+    if: contains('refs/heads/develop,refs/heads/dev', github.ref)
+    steps:
+    
+    - name: Google Auth
+      uses: google-github-actions/auth@v2.0.0
+      with:
+        credentials_json: '${{ env.GCP_SA_KEY }}'
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2.0.0
+
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.0
+
+    - name: Download Terraform Plan
+      uses: actions/download-artifact@v3
+      with:
+        name: terraform-plan-${{ env.ENVIRONMENT }}
+        path: terraform
+
+    - name: Make scripts executable
+      run: chmod +x scripts/*.sh
+
+    - name: Run deploy stage
+      run: ./scripts/deploy.sh ${{ env.ENVIRONMENT }}
+      env:
+        AUTO_APPROVE: true
+
+  post-apply:
+    needs: deploy
+    runs-on: ubuntu-latest
+    if: contains('refs/heads/develop,refs/heads/dev', github.ref)
+    steps:
+    
+    - name: Google Auth
+      uses: google-github-actions/auth@v2.0.0
+      with:
+        credentials_json: '${{ env.GCP_SA_KEY }}'
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2.0.0
+
+    - name: Make scripts executable
+      run: chmod +x scripts/*.sh
+
+    - name: Run post-apply stage
+      run: ./scripts/post-apply.sh ${{ env.ENVIRONMENT }}
+
+  notify-on-failure:
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+    - name: 📢 Notify Slack on Failure
+      run: |
+        curl -X POST -H 'Content-type: application/json' \
+          --data "{\"text\":\"Deployment failed on *${{ github.ref }}* for *${{ github.repository }}*\"}" \
+          $SLACK_WEBHOOK_URL

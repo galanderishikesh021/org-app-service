@@ -1,0 +1,60 @@
+# Production Environment Helm Values
+replicaCount: 3
+
+image:
+  repository: gcr.io/crucial-study-475405-e4/app
+  tag: "prod-latest"
+
+serviceAccount:
+  annotations:
+    iam.gke.io/gcp-service-account: "app-prod@crucial-study-475405-e4.iam.gserviceaccount.com"
+
+env:
+  - name: ENVIRONMENT
+    value: "prod"
+  - name: LOG_LEVEL
+    value: "warn"
+
+database:
+  external:
+    enabled: true
+    secretName: "app-prod-db-credentials"
+
+secretManager:
+  enabled: true
+  secretName: "app-prod-db-credentials"
+  projectId: "crucial-study-475405-e4"
+
+ingress:
+  enabled: true
+  hosts:
+    - host: app.inc.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+istio:
+  enabled: true
+  virtualService:
+    enabled: true
+    hosts:
+      - app.inc.com
+    gateways:
+      - app-prod-gateway
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 60
+
+monitoring:
+  enabled: true
