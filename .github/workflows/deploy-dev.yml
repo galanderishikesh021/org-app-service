@@ -5,6 +5,7 @@ on:
     branches: [ develop, dev ]
   pull_request:
     branches: [ develop ]
+  workflow_dispatch:
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -13,136 +14,107 @@ env:
   REGISTRY: gcr.io
   SERVICE: app
   ENVIRONMENT: dev
+  GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
 jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
     
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.9'
-    
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-    
-    - name: Run tests
-      run: |
-        python -m pytest tests/ -v --cov=app --cov-report=xml
-    
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
-        flags: dev
-        name: dev-coverage
 
-    - name: Validate Terraform
-      run: |
-        cd terraform
-        terraform init
-        terraform validate
-        terraform fmt -check
+    - name: Make scripts executable
+      run: chmod +x scripts/*.sh
+
+    - name: Run validation stage
+      run: ./scripts/validate.sh ${{ env.ENVIRONMENT }}
 
   build:
     needs: validate
     runs-on: ubuntu-latest
-    
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
+    
     - name: Google Auth
-      id: auth
-      uses: 'google-github-actions/auth@v2'
+      uses: google-github-actions/auth@v2.0.0
       with:
-        credentials_json: '${{ secrets.GCP_SA_KEY }}'
+        credentials_json: '${{ env.GCP_SA_KEY }}'
 
     - name: Set up Cloud SDK
-      uses: 'google-github-actions/setup-gcloud@v2'
+      uses: google-github-actions/setup-gcloud@v2.0.0
 
-    - name: Configure Docker
-      run: gcloud auth configure-docker
+    - name: Make scripts executable
+      run: chmod +x scripts/*.sh
 
-    - name: Build Docker Image
-      run: |
-        docker build -t "$REGISTRY/$PROJECT_ID/$SERVICE:dev-$GITHUB_SHA" .
-        docker tag "$REGISTRY/$PROJECT_ID/$SERVICE:dev-$GITHUB_SHA" "$REGISTRY/$PROJECT_ID/$SERVICE:dev-latest"
-
-    - name: Push Docker Image
-      run: |
-        docker push "$REGISTRY/$PROJECT_ID/$SERVICE:dev-$GITHUB_SHA"
-        docker push "$REGISTRY/$PROJECT_ID/$SERVICE:dev-latest"
+    - name: Run build stage
+      run: ./scripts/build.sh ${{ env.ENVIRONMENT }}
 
   plan:
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/dev'
-    
+    if: contains('refs/heads/develop,refs/heads/dev', github.ref)
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
+    
     - name: Google Auth
-      id: auth
-      uses: 'google-github-actions/auth@v2'
+      uses: google-github-actions/auth@v2.0.0
       with:
-        credentials_json: '${{ secrets.GCP_SA_KEY }}'
+        credentials_json: '${{ env.GCP_SA_KEY }}'
 
     - name: Set up Cloud SDK
-      uses: 'google-github-actions/setup-gcloud@v2'
-
-    - name: Get GKE credentials
-      run: |
-        gcloud container clusters get-credentials $GKE_CLUSTER --zone $GKE_ZONE --project $PROJECT_ID
+      uses: google-github-actions/setup-gcloud@v2.0.0
 
     - name: Set up Terraform
       uses: hashicorp/setup-terraform@v3
       with:
         terraform_version: 1.5.0
 
-    - name: Terraform Init
-      run: |
-        cd terraform
-        terraform init
+    - name: Make scripts executable
+      run: chmod +x scripts/*.sh
 
-    - name: Terraform Plan
-      run: |
-        cd terraform
-        terraform plan -var-file="../environment/dev/dev-terraform.tfvars" -out=tfplan
+    - name: Terraform Init
+      run: terraform init
+
+    - name: Terraform Validate
+      run: terraform validate
+
+    - name: Run plan stage
+      run: ./scripts/plan.sh ${{ env.ENVIRONMENT }}
 
     - name: Upload Terraform Plan
       uses: actions/upload-artifact@v3
       with:
-        name: terraform-plan-dev
+        name: terraform-plan-${{ env.ENVIRONMENT }}
         path: terraform/tfplan
 
   deploy:
     needs: plan
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/dev'
-    
+    if: contains('refs/heads/develop,refs/heads/dev', github.ref)
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
+    
     - name: Google Auth
-      id: auth
-      uses: 'google-github-actions/auth@v2'
+      uses: google-github-actions/auth@v2.0.0
       with:
-        credentials_json: '${{ secrets.GCP_SA_KEY }}'
+        credentials_json: '${{ env.GCP_SA_KEY }}'
 
     - name: Set up Cloud SDK
-      uses: 'google-github-actions/setup-gcloud@v2'
-
-    - name: Get GKE credentials
-      run: |
-        gcloud container clusters get-credentials $GKE_CLUSTER --zone $GKE_ZONE --project $PROJECT_ID
+      uses: google-github-actions/setup-gcloud@v2.0.0
 
     - name: Set up Terraform
       uses: hashicorp/setup-terraform@v3
@@ -152,59 +124,43 @@ jobs:
     - name: Download Terraform Plan
       uses: actions/download-artifact@v3
       with:
-        name: terraform-plan-dev
+        name: terraform-plan-${{ env.ENVIRONMENT }}
         path: terraform
 
-    - name: Terraform Apply
-      run: |
-        cd terraform
-        terraform apply tfplan
+    - name: Make scripts executable
+      run: chmod +x scripts/*.sh
+
+    - name: Run deploy stage
+      run: ./scripts/deploy.sh ${{ env.ENVIRONMENT }}
+      env:
+        AUTO_APPROVE: true
 
   post-apply:
     needs: deploy
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/dev'
-    
+    if: contains('refs/heads/develop,refs/heads/dev', github.ref)
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
+    
     - name: Google Auth
-      id: auth
-      uses: 'google-github-actions/auth@v2'
+      uses: google-github-actions/auth@v2.0.0
       with:
-        credentials_json: '${{ secrets.GCP_SA_KEY }}'
+        credentials_json: '${{ env.GCP_SA_KEY }}'
 
     - name: Set up Cloud SDK
-      uses: 'google-github-actions/setup-gcloud@v2'
+      uses: google-github-actions/setup-gcloud@v2.0.0
 
-    - name: Get GKE credentials
+    - name: Make scripts executable
+      run: chmod +x scripts/*.sh
+
+    - name: Run post-apply stage
+      run: ./scripts/post-apply.sh ${{ env.ENVIRONMENT }}
+
+  notify-on-failure:
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+    - name: 📢 Notify Slack on Failure
       run: |
-        gcloud container clusters get-credentials $GKE_CLUSTER --zone $GKE_ZONE --project $PROJECT_ID
-
-    - name: Verify deployment
-      run: |
-        kubectl get pods -n $ENVIRONMENT
-        kubectl get services -n $ENVIRONMENT
-        kubectl get ingress -n $ENVIRONMENT
-
-    - name: Run smoke tests
-      run: |
-        # Wait for deployment to be ready
-        kubectl wait --for=condition=available --timeout=300s deployment/$SERVICE -n $ENVIRONMENT
-        
-        # Get service endpoint
-        SERVICE_IP=$(kubectl get service $SERVICE -n $ENVIRONMENT -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-        
-        # Run basic health check
-        curl -f http://$SERVICE_IP/health || exit 1
-        echo "Dev deployment successful!"
-
-    - name: Notify Slack
-      uses: slackapi/slack-github-action@v2
-      with:
-        status: ${{ job.status }}
-        channel: '#dev-deployments'
-        text: 'Dev deployment ${{ job.status }} for commit ${{ github.sha }}'
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        curl -X POST -H 'Content-type: application/json' \
+          --data "{\"text\":\"Deployment failed on *${{ github.ref }}* for *${{ github.repository }}*\"}" \
+          $SLACK_WEBHOOK_URL
