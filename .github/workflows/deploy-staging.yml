@@ -35,7 +35,7 @@ jobs:
         run: chmod +x scripts/*.sh
 
       - name: Run validation stage
-        run: ./scripts/validate.sh staging
+        run: ./scripts/validate.sh ${{ env.ENVIRONMENT }}
 
   build:
     needs: validate
@@ -55,7 +55,7 @@ jobs:
         run: chmod +x scripts/*.sh
 
       - name: Run build stage
-        run: ./scripts/build.sh staging
+        run: ./scripts/build.sh ${{ env.ENVIRONMENT }}
 
   plan:
     needs: build
@@ -75,7 +75,7 @@ jobs:
         run: chmod +x scripts/*.sh
 
       - name: Run plan stage
-        run: ./scripts/plan.sh staging
+        run: ./scripts/plan.sh ${{ env.ENVIRONMENT }}
 
       - name: Upload Terraform Plan
         uses: actions/upload-artifact@v3
@@ -107,7 +107,7 @@ jobs:
         run: chmod +x scripts/*.sh
 
       - name: Run deploy stage
-        run: ./scripts/deploy.sh staging
+        run: ./scripts/apply.sh ${{ env.ENVIRONMENT }}
 
   post-apply:
     needs: deploy
@@ -127,7 +127,7 @@ jobs:
         run: chmod +x scripts/*.sh
 
       - name: Run post-apply stage
-        run: ./scripts/post-apply.sh staging
+        run: ./scripts/post-apply.sh ${{ env.ENVIRONMENT }}
 
   
   notify-on-failure:
