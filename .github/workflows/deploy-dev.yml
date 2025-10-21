@@ -131,7 +131,7 @@ jobs:
       run: chmod +x scripts/*.sh
 
     - name: Run deploy stage
-      run: ./scripts/deploy.sh ${{ env.ENVIRONMENT }}
+      run: ./scripts/apply.sh ${{ env.ENVIRONMENT }}
       env:
         AUTO_APPROVE: true
 
